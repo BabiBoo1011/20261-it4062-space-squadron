@@ -15,12 +15,25 @@
 
 typedef struct {
     int fd;
+    int logged_in;
+    char username[32];
     LineBuffer lb;
 } ClientSlot;
 
 static ClientSlot clients[MAX_CLIENTS];
 
-static void handle_line(int fd, const char *line) {
+static int is_user_online(const char *user) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i].fd >= 0 && clients[i].logged_in &&
+            strcmp(clients[i].username, user) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void handle_line(ClientSlot *cli, const char *line) {
+    int fd = cli->fd;
     char cmd[32], arg1[64], arg2[64];
     int n = sscanf(line, "%31s %63s %63s", cmd, arg1, arg2);
     if (n <= 0) return;
@@ -33,6 +46,28 @@ static void handle_line(int fd, const char *line) {
             send_line(fd, "OK register success");
         } else {
             send_line(fd, "ERR register failed");
+        }
+    } else if (strcmp(cmd, CMD_LOGIN) == 0 && n == 3) {
+        if (cli->logged_in) {
+            send_line(fd, "ERR already logged in");
+        } else if (is_user_online(arg1)) {
+            send_line(fd, "ERR account already online");
+        } else if (auth_verify(arg1, arg2)) {
+            cli->logged_in = 1;
+            snprintf(cli->username, sizeof(cli->username), "%s", arg1);
+            log_event("AUTH", "User logged in");
+            send_line(fd, "OK login success");
+        } else {
+            send_line(fd, "ERR invalid credentials");
+        }
+    } else if (strcmp(cmd, CMD_LOGOUT) == 0) {
+        if (cli->logged_in) {
+            cli->logged_in = 0;
+            cli->username[0] = '\0';
+            log_event("AUTH", "User logged out");
+            send_line(fd, "OK logged out");
+        } else {
+            send_line(fd, "ERR not logged in");
         }
     } else {
         char resp[BUF_SIZE];
@@ -105,6 +140,8 @@ int main(int argc, char *argv[]) {
                 for (int i = 0; i < MAX_CLIENTS; i++) {
                     if (clients[i].fd < 0) {
                         clients[i].fd = cfd;
+                        clients[i].logged_in = 0;
+                        clients[i].username[0] = '\0';
                         lb_init(&clients[i].lb);
                         log_event("CONN", "Client connected");
                         added = 1;
@@ -124,6 +161,8 @@ int main(int argc, char *argv[]) {
             if (n <= 0) {
                 close(cfd);
                 clients[i].fd = -1;
+                clients[i].logged_in = 0;
+                clients[i].username[0] = '\0';
                 log_event("CONN", "Client disconnected");
                 continue;
             }
@@ -131,12 +170,13 @@ int main(int argc, char *argv[]) {
             if (lb_append(&clients[i].lb, tmp, (int)n) < 0) {
                 close(cfd);
                 clients[i].fd = -1;
+                clients[i].logged_in = 0;
                 continue;
             }
 
             char line[BUF_SIZE];
             while (lb_pop_line(&clients[i].lb, line, sizeof(line)) == 1) {
-                handle_line(cfd, line);
+                handle_line(&clients[i], line);
             }
         }
     }
