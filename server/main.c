@@ -6,6 +6,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include "framing.h"
 #include "protocol.h"
@@ -28,6 +29,7 @@ static void handle_line(int fd, const char *line) {
 }
 
 int main(int argc, char *argv[]) {
+    signal(SIGPIPE, SIG_IGN);
     int port = (argc > 1) ? atoi(argv[1]) : DEFAULT_PORT;
 
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
