@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <signal.h>
 
+#include "auth.h"
 #include "framing.h"
 #include "logger.h"
 #include "protocol.h"
@@ -20,8 +21,19 @@ typedef struct {
 static ClientSlot clients[MAX_CLIENTS];
 
 static void handle_line(int fd, const char *line) {
-    if (strcmp(line, CMD_PING) == 0) {
+    char cmd[32], arg1[64], arg2[64];
+    int n = sscanf(line, "%31s %63s %63s", cmd, arg1, arg2);
+    if (n <= 0) return;
+
+    if (strcmp(cmd, CMD_PING) == 0) {
         send_line(fd, "PONG");
+    } else if (strcmp(cmd, CMD_REGISTER) == 0 && n == 3) {
+        if (auth_register(arg1, arg2) == 0) {
+            log_event("AUTH", "New account registered");
+            send_line(fd, "OK register success");
+        } else {
+            send_line(fd, "ERR register failed");
+        }
     } else {
         char resp[BUF_SIZE];
         snprintf(resp, sizeof(resp), "ERR unknown command: %s", line);
@@ -64,6 +76,7 @@ int main(int argc, char *argv[]) {
         clients[i].fd = -1;
     }
 
+    auth_init();
     printf("Server listening on port %d...\n", port);
     log_event("SERVER", "Started listening");
 
