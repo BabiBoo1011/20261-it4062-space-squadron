@@ -9,6 +9,7 @@
 #include <signal.h>
 
 #include "framing.h"
+#include "logger.h"
 #include "protocol.h"
 
 typedef struct {
@@ -64,6 +65,7 @@ int main(int argc, char *argv[]) {
     }
 
     printf("Server listening on port %d...\n", port);
+    log_event("SERVER", "Started listening");
 
     while (1) {
         fd_set readfds;
@@ -91,6 +93,7 @@ int main(int argc, char *argv[]) {
                     if (clients[i].fd < 0) {
                         clients[i].fd = cfd;
                         lb_init(&clients[i].lb);
+                        log_event("CONN", "Client connected");
                         added = 1;
                         break;
                     }
@@ -108,6 +111,7 @@ int main(int argc, char *argv[]) {
             if (n <= 0) {
                 close(cfd);
                 clients[i].fd = -1;
+                log_event("CONN", "Client disconnected");
                 continue;
             }
 
