@@ -54,7 +54,7 @@ static void handle_line(ClientSlot *cli, const char *line) {
             send_line(fd, "ERR account already online");
         } else if (auth_verify(arg1, arg2)) {
             cli->logged_in = 1;
-            snprintf(cli->username, sizeof(cli->username), "%s", arg1);
+            snprintf(cli->username, sizeof(cli->username), "%.31s", arg1);
             log_event("AUTH", "User logged in");
             send_line(fd, "OK login success");
         } else {
@@ -69,6 +69,13 @@ static void handle_line(ClientSlot *cli, const char *line) {
         } else {
             send_line(fd, "ERR not logged in");
         }
+    } else if (!cli->logged_in) {
+        log_event("ACCESS", "Denied unauthenticated command");
+        send_line(fd, "ERR unauthorized: login required");
+    } else if (strcmp(cmd, CMD_WHOAMI) == 0) {
+        char resp[64];
+        snprintf(resp, sizeof(resp), "OK user:%s", cli->username);
+        send_line(fd, resp);
     } else {
         char resp[BUF_SIZE];
         snprintf(resp, sizeof(resp), "ERR unknown command: %s", line);
