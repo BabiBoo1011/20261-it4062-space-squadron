@@ -64,3 +64,26 @@ int team_create(const char *name, const char *captain) {
     }
     return TEAM_ERR_NO_SLOT;
 }
+
+/* Ghi vao out: "<team>:<so_nguoi>/3 <team>:<so_nguoi>/3> ..." */
+void team_list(char *out, int out_size) {
+    int pos = 0;
+    out[0] = '\0';
+    for (int i = 0; i < MAX_TEAMS; i++) {
+        if (!teams[i].used) continue;
+        int w = snprintf(out + pos, out_size - pos, "%s%s:%d/%d",
+                        pos > 0 ? " " : "", teams[i].name, 
+                        teams[i].member_count, MAX_TEAM_SIZE);
+        if (w < 0 || w >= out_size - pos) break; /* het cho trong buffer*/
+        pos += w;
+    }
+}
+
+/* Ghi vao out: "captain=<user> members=<u1>,<u2>,<u3>" */
+void team_members_str(const Team *t, char *out, int out_size) {
+    int pos = snprintf(out, out_size, "captain=%s members=", t->members[0]);
+    for (int j = 0; j < t->member_count && pos < out_size; j++) {
+        pos += snprintf(out + pos, out_size - pos, "%s%s", 
+                        j > 0 ? "," : "", t->members[j]);
+    }
+}

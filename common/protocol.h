@@ -49,5 +49,7 @@
 
 /* Lenh quan ly doi */
 #define CMD_TEAM_CREATE  "TEAM_CREATE"
+#define CMD_TEAM_LIST    "TEAM_LIST"
+#define CMD_TEAM_MEMBERS "TEAM_MEMBERS"
 
 #endif

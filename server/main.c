@@ -62,6 +62,36 @@ static void cmd_team_create(ClientSlot *cli, int n, const char *team_name) {
     send_line(cli->fd, resp);
 }
 
+/* TEAM_LIST */
+static void cmd_team_list(ClientSlot *cli) {
+    char list[BUF_SIZE - 32];
+    team_list(list, sizeof(list));
+
+    char resp[BUF_SIZE];
+    snprintf(resp, sizeof(resp), "OK TEAM_LIST%s%s", list[0] ? " " : "", list);
+    send_line(cli->fd, resp);
+}
+
+/*TEAM_MEMBERS <team> */
+static void cmd_team_members(ClientSlot *cli, int n, const char *team_name) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_MEMBERS <team>");
+        return;
+    }
+    Team *t = team_find(team_name);
+    if (!t) {
+        send_line(cli->fd, "ERR 404 team not found");
+        return;
+    }
+
+    char info[256];
+    team_members_str(t, info, sizeof(info));
+
+    char resp[512];
+    snprintf(resp, sizeof(resp), "OK TEAM_MEMBERS %s %s", t->name, info);
+    send_line(cli->fd, resp);
+}
+
 /* ======================================================= */
 
 static void handle_line(ClientSlot *cli, const char *line) {
@@ -110,6 +140,10 @@ static void handle_line(ClientSlot *cli, const char *line) {
         send_line(fd, resp);
     } else if (strcmp(cmd, CMD_TEAM_CREATE) == 0) {
         cmd_team_create(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_TEAM_LIST) == 0) {
+        cmd_team_list(cli);
+    } else if (strcmp(cmd, CMD_TEAM_MEMBERS) == 0) {
+        cmd_team_members(cli, n, arg1);
     } else {
         char resp[BUF_SIZE];
         snprintf(resp, sizeof(resp), "ERR unknown command: %s", line);

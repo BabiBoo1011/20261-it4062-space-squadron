@@ -28,5 +28,7 @@ int team_valid_name(const char *name);
 Team *team_find(const char *name);
 Team *team_find_by_member(const char *user);
 int team_create(const char *name, const char *captain);
+void team_list(char *out, int out_size);
+void team_members_str(const Team *t, char *out, int out_size);
 
 #endif
