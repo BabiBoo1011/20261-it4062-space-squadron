@@ -16,6 +16,9 @@ const char *team_strerror(int rc) {
     case TEAM_ERR_EXISTS:      return "409 team already exists";
     case TEAM_ERR_IN_TEAM:     return "412 already in a team";
     case TEAM_ERR_NO_SLOT:     return "500 server is full";
+    case TEAM_ERR_NOT_FOUND:   return "404 not found";
+    case TEAM_ERR_NOT_CAPTAIN: return "403 only team captain can do this";
+    case TEAM_ERR_NOT_IN_TEAM: return "412 you are not in a team";
     default:                   return "500 unknown error";
     }
 }
@@ -86,4 +89,27 @@ void team_members_str(const Team *t, char *out, int out_size) {
         pos += snprintf(out + pos, out_size - pos, "%s%s", 
                         j > 0 ? "," : "", t->members[j]);
     }
+}
+
+int team_is_captain(const Team *t, const char *user) {
+    return t->member_count > 0 && strcmp(t->members[0], user) == 0;
+}
+
+/* Xoa 1 thanh vien (khong phai doi truong) khoi doi, don cac thanh vien phia sau len */
+int team_remove_member(Team *t, const char *user) {
+    for (int j = 1; j < t->member_count; j++) {
+        if (strcmp(t->members[j], user) == 0) {
+            for (int k = j; k < t->member_count - 1; k++) {
+                memcpy(t->members[k], t->members[k + 1], USER_NAME_LEN);
+            }
+            t->member_count--;
+            t->members[t->member_count][0] = '\0';
+            return TEAM_OK;
+        }
+    }
+    return TEAM_ERR_NOT_FOUND;
+}
+
+void team_disband(Team *t) {
+    memset(t, 0, sizeof(Team));
 }
