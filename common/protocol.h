@@ -45,5 +45,6 @@
 #define CMD_REGISTER "REGISTER"
 #define CMD_LOGIN    "LOGIN"
 #define CMD_LOGOUT   "LOGOUT"
+#define CMD_WHOAMI   "WHOAMI"
 
 #endif
