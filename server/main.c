@@ -12,6 +12,7 @@
 #include "framing.h"
 #include "logger.h"
 #include "protocol.h"
+#include "team.h"
 
 typedef struct {
     int fd;
@@ -31,6 +32,37 @@ static int is_user_online(const char *user) {
     }
     return 0;
 }
+
+/* ===================== QUAN LY DOI ===================== */
+
+static void send_team_err(int fd, int rc) {
+    char resp[128];
+    snprintf(resp, sizeof(resp), "ERR %s", team_strerror(rc));
+    send_line(fd, resp);
+}
+
+/* TEAM_CREATE <team> */
+static void cmd_team_create(ClientSlot *cli, int n, const char *team_name) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_CREATE <team>");
+        return;
+    }
+    int rc = team_create(team_name, cli->username);
+    if (rc != TEAM_OK) {
+        send_team_err(cli->fd, rc);
+        return;
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s created team %s", cli->username, team_name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK TEAM_CREATE %s", team_name);
+    send_line(cli->fd, resp);
+}
+
+/* ======================================================= */
 
 static void handle_line(ClientSlot *cli, const char *line) {
     int fd = cli->fd;
@@ -76,6 +108,8 @@ static void handle_line(ClientSlot *cli, const char *line) {
         char resp[64];
         snprintf(resp, sizeof(resp), "OK user:%s", cli->username);
         send_line(fd, resp);
+    } else if (strcmp(cmd, CMD_TEAM_CREATE) == 0) {
+        cmd_team_create(cli, n, arg1);
     } else {
         char resp[BUF_SIZE];
         snprintf(resp, sizeof(resp), "ERR unknown command: %s", line);
@@ -119,6 +153,7 @@ int main(int argc, char *argv[]) {
     }
 
     auth_init();
+    team_init();
     printf("Server listening on port %d...\n", port);
     log_event("SERVER", "Started listening");
 

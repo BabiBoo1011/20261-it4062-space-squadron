@@ -47,4 +47,7 @@
 #define CMD_LOGOUT   "LOGOUT"
 #define CMD_WHOAMI   "WHOAMI"
 
+/* Lenh quan ly doi */
+#define CMD_TEAM_CREATE  "TEAM_CREATE"
+
 #endif
