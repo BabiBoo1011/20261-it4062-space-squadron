@@ -6,6 +6,7 @@
 
 #define MAX_TEAMS         32
 #define MAX_TEAM_REQUESTS 64
+#define MAX_CHALLENGES    32
 #define TEAM_NAME_LEN     21 /* toi da 20 ky tu + '\0' */
 #define USER_NAME_LEN     32
 
@@ -53,11 +54,25 @@ int team_add_member(Team *t, const char *user);
 int team_remove_member(Team *t, const char *user);
 void team_disband(Team *t);
 
+typedef struct {
+    int used;
+    char from_team[TEAM_NAME_LEN];
+    char to_team[TEAM_NAME_LEN];
+    int accepted;
+    time_t created_at;
+} Challenge;
+
 int req_add(int type, const char *team, const char *user);
 TeamRequest *req_find(int type, const char *team, const char *user);
 void req_remove(TeamRequest *r);
 void req_clear_team(const char *team);
 void req_clear_user(const char *user);
 TeamRequest *req_at(int idx);
+
+int challenge_add(const char *from_team, const char *to_team);
+Challenge *challenge_find(const char *from_team, const char *to_team);
+void challenge_remove(Challenge *c);
+void challenge_clear_team(const char *team);
+Challenge *challenge_at(int idx);
 
 #endif

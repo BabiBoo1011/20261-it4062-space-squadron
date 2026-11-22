@@ -413,7 +413,125 @@ static void cmd_invite_decline(ClientSlot *cli, int n, const char *team_name) {
     send_line(cli->fd, resp);
 }
 
-/* Kiem tra va huy cac yeu cau / loi moi qua han 2 phut */
+/* CHALLENGE <team> (chi doi truong) */
+static void cmd_challenge(ClientSlot *cli, int n, const char *target_team) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: CHALLENGE <team>");
+        return;
+    }
+    Team *my_team = team_find_by_member(cli->username);
+    if (!my_team) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(my_team, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    Team *enemy = team_find(target_team);
+    if (!enemy) {
+        send_line(cli->fd, "ERR 404 team not found");
+        return;
+    }
+    if (enemy == my_team) {
+        send_line(cli->fd, "ERR 400 cannot challenge own team");
+        return;
+    }
+    int rc = challenge_add(my_team->name, enemy->name);
+    if (rc != TEAM_OK) {
+        send_team_err(cli->fd, rc);
+        return;
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT CHALLENGE %s", my_team->name);
+    send_to_user(enemy->members[0], msg);
+    snprintf(msg, sizeof(msg), "%s challenged %s", my_team->name, enemy->name);
+    log_event("MATCH", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK CHALLENGE %s", enemy->name);
+    send_line(cli->fd, resp);
+}
+
+/* CHALLENGE_ACCEPT <team> (chi doi truong) */
+static void cmd_challenge_accept(ClientSlot *cli, int n, const char *from_team) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: CHALLENGE_ACCEPT <team>");
+        return;
+    }
+    Team *my_team = team_find_by_member(cli->username);
+    if (!my_team) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(my_team, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    Challenge *c = challenge_find(from_team, my_team->name);
+    if (!c || c->accepted) {
+        send_line(cli->fd, "ERR 404 challenge not found");
+        return;
+    }
+    Team *sender = team_find(from_team);
+    if (!sender) {
+        challenge_remove(c);
+        send_line(cli->fd, "ERR 404 team not found");
+        return;
+    }
+    c->accepted = 1;
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT CHALLENGE_ACCEPTED %s %s", sender->name, my_team->name);
+    notify_team(sender, NULL, msg);
+    notify_team(my_team, NULL, msg);
+    snprintf(msg, sizeof(msg), "%s accepted challenge from %s", my_team->name, sender->name);
+    log_event("MATCH", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK CHALLENGE_ACCEPT %s", sender->name);
+    send_line(cli->fd, resp);
+}
+
+/* CHALLENGE_DECLINE <team> (chi doi truong) */
+static void cmd_challenge_decline(ClientSlot *cli, int n, const char *from_team) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: CHALLENGE_DECLINE <team>");
+        return;
+    }
+    Team *my_team = team_find_by_member(cli->username);
+    if (!my_team) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(my_team, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    Challenge *c = challenge_find(from_team, my_team->name);
+    if (!c || c->accepted) {
+        send_line(cli->fd, "ERR 404 challenge not found");
+        return;
+    }
+    challenge_remove(c);
+
+    Team *sender = team_find(from_team);
+    if (sender) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "EVT CHALLENGE_DECLINED %s", my_team->name);
+        send_to_user(sender->members[0], msg);
+    }
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s declined challenge from %s", my_team->name, from_team);
+    log_event("MATCH", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK CHALLENGE_DECLINE %s", from_team);
+    send_line(cli->fd, resp);
+}
+
+/* Kiem tra va huy cac yeu cau / loi moi / thach dau qua han 2 phut */
 static void check_expired_requests(void) {
     time_t now = time(NULL);
     for (int i = 0; i < MAX_TEAM_REQUESTS; i++) {
@@ -429,6 +547,20 @@ static void check_expired_requests(void) {
 
         log_event("TEAM", msg);
         req_remove(r);
+    }
+    for (int i = 0; i < MAX_CHALLENGES; i++) {
+        Challenge *c = challenge_at(i);
+        if (!c || c->accepted || now - c->created_at < REQUEST_TIMEOUT_SEC) continue;
+
+        char msg[128];
+        snprintf(msg, sizeof(msg), "EVT CHALLENGE_EXPIRED %s %s", c->from_team, c->to_team);
+        Team *ta = team_find(c->from_team);
+        Team *tb = team_find(c->to_team);
+        if (ta) send_to_user(ta->members[0], msg);
+        if (tb) send_to_user(tb->members[0], msg);
+
+        log_event("MATCH", msg);
+        challenge_remove(c);
     }
 }
 
@@ -504,6 +636,12 @@ static void handle_line(ClientSlot *cli, const char *line) {
         cmd_invite_accept(cli, n, arg1);
     } else if (strcmp(cmd, CMD_INVITE_DECLINE) == 0) {
         cmd_invite_decline(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_CHALLENGE) == 0) {
+        cmd_challenge(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_CHALLENGE_ACCEPT) == 0) {
+        cmd_challenge_accept(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_CHALLENGE_DECLINE) == 0) {
+        cmd_challenge_decline(cli, n, arg1);
     } else {
         char resp[BUF_SIZE];
         snprintf(resp, sizeof(resp), "ERR unknown command: %s", line);

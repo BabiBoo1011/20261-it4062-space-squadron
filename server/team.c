@@ -5,10 +5,12 @@
 
 static Team teams[MAX_TEAMS];
 static TeamRequest requests[MAX_TEAM_REQUESTS];
+static Challenge challenges[MAX_CHALLENGES];
 
 void team_init(void) {
     memset(teams, 0, sizeof(teams));
     memset(requests, 0, sizeof(requests));
+    memset(challenges, 0, sizeof(challenges));
 }
 
 /* Doi ma ket qua thanh "<ma_loi> <mo_ta>" de gui kem sau "ERR " */
@@ -124,6 +126,7 @@ int team_remove_member(Team *t, const char *user) {
 
 void team_disband(Team *t) {
     req_clear_team(t->name);
+    challenge_clear_team(t->name);
     memset(t, 0, sizeof(Team));
 }
 
@@ -176,4 +179,51 @@ void req_clear_user(const char *user) {
 TeamRequest *req_at(int idx) {
     if (idx < 0 || idx >= MAX_TEAM_REQUESTS) return NULL;
     return requests[idx].used ? &requests[idx] : NULL;
+}
+
+Challenge *challenge_find(const char *from_team, const char *to_team) {
+    for (int i = 0; i < MAX_CHALLENGES; i++) {
+        if (challenges[i].used &&
+            strcmp(challenges[i].from_team, from_team) == 0 &&
+            strcmp(challenges[i].to_team, to_team) == 0) {
+            return &challenges[i];
+        }
+    }
+    return NULL;
+}
+
+int challenge_add(const char *from_team, const char *to_team) {
+    if (challenge_find(from_team, to_team) || challenge_find(to_team, from_team)) {
+        return TEAM_ERR_DUP_REQ;
+    }
+    for (int i = 0; i < MAX_CHALLENGES; i++) {
+        if (!challenges[i].used) {
+            challenges[i].used = 1;
+            snprintf(challenges[i].from_team, TEAM_NAME_LEN, "%s", from_team);
+            snprintf(challenges[i].to_team, TEAM_NAME_LEN, "%s", to_team);
+            challenges[i].accepted = 0;
+            challenges[i].created_at = time(NULL);
+            return TEAM_OK;
+        }
+    }
+    return TEAM_ERR_NO_SLOT;
+}
+
+void challenge_remove(Challenge *c) {
+    if (c) memset(c, 0, sizeof(Challenge));
+}
+
+void challenge_clear_team(const char *team) {
+    for (int i = 0; i < MAX_CHALLENGES; i++) {
+        if (challenges[i].used &&
+            (strcmp(challenges[i].from_team, team) == 0 ||
+             strcmp(challenges[i].to_team, team) == 0)) {
+            challenge_remove(&challenges[i]);
+        }
+    }
+}
+
+Challenge *challenge_at(int idx) {
+    if (idx < 0 || idx >= MAX_CHALLENGES) return NULL;
+    return challenges[idx].used ? &challenges[idx] : NULL;
 }
