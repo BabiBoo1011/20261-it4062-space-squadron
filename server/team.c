@@ -4,9 +4,11 @@
 #include <string.h>
 
 static Team teams[MAX_TEAMS];
+static TeamRequest requests[MAX_TEAM_REQUESTS];
 
 void team_init(void) {
     memset(teams, 0, sizeof(teams));
+    memset(requests, 0, sizeof(requests));
 }
 
 /* Doi ma ket qua thanh "<ma_loi> <mo_ta>" de gui kem sau "ERR " */
@@ -19,6 +21,8 @@ const char *team_strerror(int rc) {
     case TEAM_ERR_NOT_FOUND:   return "404 not found";
     case TEAM_ERR_NOT_CAPTAIN: return "403 only team captain can do this";
     case TEAM_ERR_NOT_IN_TEAM: return "412 you are not in a team";
+    case TEAM_ERR_FULL:        return "421 team is full";
+    case TEAM_ERR_DUP_REQ:     return "409 request already pending";
     default:                   return "500 unknown error";
     }
 }
@@ -95,6 +99,14 @@ int team_is_captain(const Team *t, const char *user) {
     return t->member_count > 0 && strcmp(t->members[0], user) == 0;
 }
 
+int team_add_member(Team *t, const char *user) {
+    if (t->member_count >= MAX_TEAM_SIZE) return TEAM_ERR_FULL;
+    if (team_find_by_member(user)) return TEAM_ERR_IN_TEAM;
+    snprintf(t->members[t->member_count], USER_NAME_LEN, "%s", user);
+    t->member_count++;
+    return TEAM_OK;
+}
+
 /* Xoa 1 thanh vien (khong phai doi truong) khoi doi, don cac thanh vien phia sau len */
 int team_remove_member(Team *t, const char *user) {
     for (int j = 1; j < t->member_count; j++) {
@@ -111,5 +123,57 @@ int team_remove_member(Team *t, const char *user) {
 }
 
 void team_disband(Team *t) {
+    req_clear_team(t->name);
     memset(t, 0, sizeof(Team));
+}
+
+TeamRequest *req_find(int type, const char *team, const char *user) {
+    for (int i = 0; i < MAX_TEAM_REQUESTS; i++) {
+        if (requests[i].used && requests[i].type == type &&
+            strcmp(requests[i].team, team) == 0 &&
+            strcmp(requests[i].user, user) == 0) {
+            return &requests[i];
+        }
+    }
+    return NULL;
+}
+
+int req_add(int type, const char *team, const char *user) {
+    if (req_find(type, team, user)) return TEAM_ERR_DUP_REQ;
+    for (int i = 0; i < MAX_TEAM_REQUESTS; i++) {
+        if (!requests[i].used) {
+            requests[i].used = 1;
+            requests[i].type = type;
+            snprintf(requests[i].team, TEAM_NAME_LEN, "%s", team);
+            snprintf(requests[i].user, USER_NAME_LEN, "%s", user);
+            requests[i].created_at = time(NULL);
+            return TEAM_OK;
+        }
+    }
+    return TEAM_ERR_NO_SLOT;
+}
+
+void req_remove(TeamRequest *r) {
+    if (r) memset(r, 0, sizeof(TeamRequest));
+}
+
+void req_clear_team(const char *team) {
+    for (int i = 0; i < MAX_TEAM_REQUESTS; i++) {
+        if (requests[i].used && strcmp(requests[i].team, team) == 0) {
+            req_remove(&requests[i]);
+        }
+    }
+}
+
+void req_clear_user(const char *user) {
+    for (int i = 0; i < MAX_TEAM_REQUESTS; i++) {
+        if (requests[i].used && strcmp(requests[i].user, user) == 0) {
+            req_remove(&requests[i]);
+        }
+    }
+}
+
+TeamRequest *req_at(int idx) {
+    if (idx < 0 || idx >= MAX_TEAM_REQUESTS) return NULL;
+    return requests[idx].used ? &requests[idx] : NULL;
 }
