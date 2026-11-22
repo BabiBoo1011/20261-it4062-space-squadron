@@ -413,6 +413,25 @@ static void cmd_invite_decline(ClientSlot *cli, int n, const char *team_name) {
     send_line(cli->fd, resp);
 }
 
+/* Kiem tra va huy cac yeu cau / loi moi qua han 2 phut */
+static void check_expired_requests(void) {
+    time_t now = time(NULL);
+    for (int i = 0; i < MAX_TEAM_REQUESTS; i++) {
+        TeamRequest *r = req_at(i);
+        if (!r || now - r->created_at < REQUEST_TIMEOUT_SEC) continue;
+
+        const char *evt = (r->type == REQ_JOIN) ? "JOIN_EXPIRED" : "INVITE_EXPIRED";
+        char msg[128];
+        snprintf(msg, sizeof(msg), "EVT %s %s %s", evt, r->team, r->user);
+        send_to_user(r->user, msg);
+        Team *t = team_find(r->team);
+        if (t) send_to_user(t->members[0], msg);
+
+        log_event("TEAM", msg);
+        req_remove(r);
+    }
+}
+
 /* ======================================================= */
 
 static void handle_line(ClientSlot *cli, const char *line) {
@@ -446,6 +465,7 @@ static void handle_line(ClientSlot *cli, const char *line) {
     } else if (strcmp(cmd, CMD_LOGOUT) == 0) {
         if (cli->logged_in) {
             leave_current_team(cli->username);
+            req_clear_user(cli->username);
             cli->logged_in = 0;
             cli->username[0] = '\0';
             log_event("AUTH", "User logged out");
@@ -544,10 +564,12 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        if (select(max_fd + 1, &readfds, NULL, NULL, NULL) < 0) {
+        struct timeval tv = {1, 0};
+        if (select(max_fd + 1, &readfds, NULL, NULL, &tv) < 0) {
             perror("select");
             break;
         }
+        check_expired_requests();
 
         if (FD_ISSET(listen_fd, &readfds)) {
             int cfd = accept(listen_fd, NULL, NULL);
@@ -575,7 +597,10 @@ int main(int argc, char *argv[]) {
             char tmp[BUF_SIZE];
             ssize_t n = recv(cfd, tmp, sizeof(tmp), 0);
             if (n <= 0) {
-                if (clients[i].logged_in) leave_current_team(clients[i].username);
+                if (clients[i].logged_in) {
+                    leave_current_team(clients[i].username);
+                    req_clear_user(clients[i].username);
+                }
                 close(cfd);
                 clients[i].fd = -1;
                 clients[i].logged_in = 0;
@@ -585,7 +610,10 @@ int main(int argc, char *argv[]) {
             }
 
             if (lb_append(&clients[i].lb, tmp, (int)n) < 0) {
-                if (clients[i].logged_in) leave_current_team(clients[i].username);
+                if (clients[i].logged_in) {
+                    leave_current_team(clients[i].username);
+                    req_clear_user(clients[i].username);
+                }
                 close(cfd);
                 clients[i].fd = -1;
                 clients[i].logged_in = 0;
