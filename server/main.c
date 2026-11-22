@@ -192,6 +192,116 @@ static void cmd_team_kick(ClientSlot *cli, int n, const char *target) {
     send_line(cli->fd, resp);
 }
 
+/* TEAM_JOIN <team> */
+static void cmd_team_join(ClientSlot *cli, int n, const char *team_name) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_JOIN <team>");
+        return;
+    }
+    if (team_find_by_member(cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_IN_TEAM);
+        return;
+    }
+    Team *t = team_find(team_name);
+    if (!t) {
+        send_line(cli->fd, "ERR 404 team not found");
+        return;
+    }
+    if (t->member_count >= MAX_TEAM_SIZE) {
+        send_team_err(cli->fd, TEAM_ERR_FULL);
+        return;
+    }
+    int rc = req_add(REQ_JOIN, t->name, cli->username);
+    if (rc != TEAM_OK) {
+        send_team_err(cli->fd, rc);
+        return;
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT JOIN_REQUEST %s", cli->username);
+    send_to_user(t->members[0], msg);
+    snprintf(msg, sizeof(msg), "%s requested to join team %s", cli->username, t->name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK TEAM_JOIN %s", t->name);
+    send_line(cli->fd, resp);
+}
+
+/* TEAM_APPROVE <user> (chi doi truong) */
+static void cmd_team_approve(ClientSlot *cli, int n, const char *target) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_APPROVE <user>");
+        return;
+    }
+    Team *t = team_find_by_member(cli->username);
+    if (!t) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(t, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    TeamRequest *r = req_find(REQ_JOIN, t->name, target);
+    if (!r) {
+        send_line(cli->fd, "ERR 404 join request not found");
+        return;
+    }
+    int rc = team_add_member(t, target);
+    if (rc != TEAM_OK) {
+        if (rc == TEAM_ERR_IN_TEAM) req_remove(r);
+        send_team_err(cli->fd, rc);
+        return;
+    }
+    req_clear_user(target);
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT JOIN_ACCEPTED %s", t->name);
+    send_to_user(target, msg);
+    snprintf(msg, sizeof(msg), "EVT MEMBER_JOINED %s", target);
+    notify_team(t, target, msg);
+    snprintf(msg, sizeof(msg), "%s approved %s into team %s", cli->username, target, t->name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK TEAM_APPROVE %s", target);
+    send_line(cli->fd, resp);
+}
+
+/* TEAM_REJECT <user> (chi doi truong) */
+static void cmd_team_reject(ClientSlot *cli, int n, const char *target) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_REJECT <user>");
+        return;
+    }
+    Team *t = team_find_by_member(cli->username);
+    if (!t) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(t, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    TeamRequest *r = req_find(REQ_JOIN, t->name, target);
+    if (!r) {
+        send_line(cli->fd, "ERR 404 join request not found");
+        return;
+    }
+    req_remove(r);
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT JOIN_REJECTED %s", t->name);
+    send_to_user(target, msg);
+    snprintf(msg, sizeof(msg), "%s rejected %s from team %s", cli->username, target, t->name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK TEAM_REJECT %s", target);
+    send_line(cli->fd, resp);
+}
+
 /* ======================================================= */
 
 static void handle_line(ClientSlot *cli, const char *line) {
@@ -251,6 +361,12 @@ static void handle_line(ClientSlot *cli, const char *line) {
         cmd_team_leave(cli);
     } else if (strcmp(cmd, CMD_TEAM_KICK) == 0) {
         cmd_team_kick(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_TEAM_JOIN) == 0) {
+        cmd_team_join(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_TEAM_APPROVE) == 0) {
+        cmd_team_approve(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_TEAM_REJECT) == 0) {
+        cmd_team_reject(cli, n, arg1);
     } else {
         char resp[BUF_SIZE];
         snprintf(resp, sizeof(resp), "ERR unknown command: %s", line);
