@@ -302,6 +302,117 @@ static void cmd_team_reject(ClientSlot *cli, int n, const char *target) {
     send_line(cli->fd, resp);
 }
 
+/* TEAM_INVITE <user> (chi doi truong) */
+static void cmd_team_invite(ClientSlot *cli, int n, const char *target) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_INVITE <user>");
+        return;
+    }
+    Team *t = team_find_by_member(cli->username);
+    if (!t) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(t, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    if (t->member_count >= MAX_TEAM_SIZE) {
+        send_team_err(cli->fd, TEAM_ERR_FULL);
+        return;
+    }
+    if (!is_user_online(target)) {
+        send_line(cli->fd, "ERR 404 user not online");
+        return;
+    }
+    if (team_find_by_member(target)) {
+        send_line(cli->fd, "ERR 412 user already in a team");
+        return;
+    }
+    int rc = req_add(REQ_INVITE, t->name, target);
+    if (rc != TEAM_OK) {
+        send_team_err(cli->fd, rc);
+        return;
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT INVITE %s %s", t->name, cli->username);
+    send_to_user(target, msg);
+    snprintf(msg, sizeof(msg), "%s invited %s to team %s", cli->username, target, t->name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK TEAM_INVITE %s", target);
+    send_line(cli->fd, resp);
+}
+
+/* INVITE_ACCEPT <team> */
+static void cmd_invite_accept(ClientSlot *cli, int n, const char *team_name) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: INVITE_ACCEPT <team>");
+        return;
+    }
+    if (team_find_by_member(cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_IN_TEAM);
+        return;
+    }
+    TeamRequest *r = req_find(REQ_INVITE, team_name, cli->username);
+    if (!r) {
+        send_line(cli->fd, "ERR 404 invite not found");
+        return;
+    }
+    Team *t = team_find(team_name);
+    if (!t) {
+        req_remove(r);
+        send_line(cli->fd, "ERR 404 team not found");
+        return;
+    }
+    int rc = team_add_member(t, cli->username);
+    if (rc != TEAM_OK) {
+        send_team_err(cli->fd, rc);
+        return;
+    }
+    req_clear_user(cli->username);
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT MEMBER_JOINED %s", cli->username);
+    notify_team(t, cli->username, msg);
+    snprintf(msg, sizeof(msg), "%s accepted invite to team %s", cli->username, t->name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK INVITE_ACCEPT %s", t->name);
+    send_line(cli->fd, resp);
+}
+
+/* INVITE_DECLINE <team> */
+static void cmd_invite_decline(ClientSlot *cli, int n, const char *team_name) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: INVITE_DECLINE <team>");
+        return;
+    }
+    TeamRequest *r = req_find(REQ_INVITE, team_name, cli->username);
+    if (!r) {
+        send_line(cli->fd, "ERR 404 invite not found");
+        return;
+    }
+    req_remove(r);
+
+    Team *t = team_find(team_name);
+    if (t) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "EVT INVITE_DECLINED %s", cli->username);
+        send_to_user(t->members[0], msg);
+    }
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s declined invite from team %s", cli->username, team_name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK INVITE_DECLINE %s", team_name);
+    send_line(cli->fd, resp);
+}
+
 /* ======================================================= */
 
 static void handle_line(ClientSlot *cli, const char *line) {
@@ -367,6 +478,12 @@ static void handle_line(ClientSlot *cli, const char *line) {
         cmd_team_approve(cli, n, arg1);
     } else if (strcmp(cmd, CMD_TEAM_REJECT) == 0) {
         cmd_team_reject(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_TEAM_INVITE) == 0) {
+        cmd_team_invite(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_INVITE_ACCEPT) == 0) {
+        cmd_invite_accept(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_INVITE_DECLINE) == 0) {
+        cmd_invite_decline(cli, n, arg1);
     } else {
         char resp[BUF_SIZE];
         snprintf(resp, sizeof(resp), "ERR unknown command: %s", line);
