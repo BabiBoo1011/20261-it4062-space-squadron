@@ -12,6 +12,7 @@
 #include "framing.h"
 #include "logger.h"
 #include "protocol.h"
+#include "team.h"
 
 typedef struct {
     int fd;
@@ -31,6 +32,167 @@ static int is_user_online(const char *user) {
     }
     return 0;
 }
+
+/* ===================== QUAN LY DOI ===================== */
+
+static void send_team_err(int fd, int rc) {
+    char resp[128];
+    snprintf(resp, sizeof(resp), "ERR %s", team_strerror(rc));
+    send_line(fd, resp);
+}
+
+/* Gui 1 dong toi nguoi choi dang online (bo qua neu nguoi do offline) */
+static void send_to_user(const char *user, const char *msg) {
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i].fd >= 0 && clients[i].logged_in &&
+            strcmp(clients[i].username, user) == 0) {
+            send_line(clients[i].fd, msg);
+            return;
+        }
+    }
+}
+
+/* Gui 1 dong toi moi thanh vien trong doi, tru nguoi "except" (co the NULL) */
+static void notify_team(const Team *t, const char *except, const char *msg) {
+    for (int j = 0; j < t->member_count; j++) {
+        if (except && strcmp(t->members[j], except) == 0) continue;
+        send_to_user(t->members[j], msg);
+    }
+}
+
+/* Nguoi choi roi doi hien tai (tu roi, dang xuat hoac mat ket noi ).
+   Neu la doi truong thi giai tan doi. Tra ve 0 neu nguoi do khong o doi nao. */
+static int leave_current_team(const char *user) {
+    Team *t = team_find_by_member(user);
+    if (!t) return 0;
+
+    char msg[128];
+    if (team_is_captain(t, user)) {
+        snprintf(msg, sizeof(msg), "EVT TEAM_DELETED %s", t->name);
+        notify_team(t, user, msg);
+        snprintf(msg, sizeof(msg), "team %s disbanded (captain %s left)", t->name, user);
+        log_event("TEAM", msg);
+        team_disband(t);
+    } else {
+        team_remove_member(t, user);
+        snprintf(msg, sizeof(msg), "EVT MEMBER_LEFT %s", user);
+        notify_team(t, NULL, msg);
+        snprintf(msg, sizeof(msg), "%s left team %s", user, t->name);
+        log_event("TEAM", msg);
+    }
+    return 1;
+}
+
+/* TEAM_CREATE <team> */
+static void cmd_team_create(ClientSlot *cli, int n, const char *team_name) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_CREATE <team>");
+        return;
+    }
+    int rc = team_create(team_name, cli->username);
+    if (rc != TEAM_OK) {
+        send_team_err(cli->fd, rc);
+        return;
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s created team %s", cli->username, team_name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK TEAM_CREATE %s", team_name);
+    send_line(cli->fd, resp);
+}
+
+/* TEAM_LIST */
+static void cmd_team_list(ClientSlot *cli) {
+    char list[BUF_SIZE - 32];
+    team_list(list, sizeof(list));
+
+    char resp[BUF_SIZE];
+    snprintf(resp, sizeof(resp), "OK TEAM_LIST%s%s", list[0] ? " " : "", list);
+    send_line(cli->fd, resp);
+}
+
+/*TEAM_MEMBERS <team> */
+static void cmd_team_members(ClientSlot *cli, int n, const char *team_name) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_MEMBERS <team>");
+        return;
+    }
+    Team *t = team_find(team_name);
+    if (!t) {
+        send_line(cli->fd, "ERR 404 team not found");
+        return;
+    }
+
+    char info[256];
+    team_members_str(t, info, sizeof(info));
+
+    char resp[512];
+    snprintf(resp, sizeof(resp), "OK TEAM_MEMBERS %s %s", t->name, info);
+    send_line(cli->fd, resp);
+}
+
+/* TEAM_DELETE (chi doi truong) */
+static void cmd_team_delete(ClientSlot *cli) {
+    Team *t = team_find_by_member(cli->username);
+    if (!t) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(t, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    leave_current_team(cli->username); /* doi truong roi doi = giai tan */
+    send_line(cli->fd, "OK TEAM_DELETE");
+}
+
+/* TEAM_LEAVE */
+static void cmd_team_leave(ClientSlot *cli) {
+    if (!leave_current_team(cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    send_line(cli->fd, "OK TEAM_LEAVE");
+}
+
+/* TEAM_KICK <user> (chi doi truong) */
+static void cmd_team_kick(ClientSlot *cli, int n, const char *target) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_KICK <user>");
+        return;
+    }
+    Team *t = team_find_by_member(cli->username);
+    if (!t) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(t, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    /* team_remove_member khong xoa duoc members[0], nen doi truong khong tu kick minh */
+    if (team_remove_member(t, target) != TEAM_OK) {
+        send_line(cli->fd, "ERR 404 member not found");
+        return;
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT KICKED %s", t->name);
+    send_to_user(target, msg);
+    snprintf(msg, sizeof(msg), "EVT MEMBER_LEFT %s", target);
+    notify_team(t, cli->username, msg);
+    snprintf(msg, sizeof(msg), "%s kicked %s from team %s", cli->username, target, t->name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK TEAM_KICK %s", target);
+    send_line(cli->fd, resp);
+}
+
+/* ======================================================= */
 
 static void handle_line(ClientSlot *cli, const char *line) {
     int fd = cli->fd;
@@ -62,6 +224,7 @@ static void handle_line(ClientSlot *cli, const char *line) {
         }
     } else if (strcmp(cmd, CMD_LOGOUT) == 0) {
         if (cli->logged_in) {
+            leave_current_team(cli->username);
             cli->logged_in = 0;
             cli->username[0] = '\0';
             log_event("AUTH", "User logged out");
@@ -76,6 +239,18 @@ static void handle_line(ClientSlot *cli, const char *line) {
         char resp[64];
         snprintf(resp, sizeof(resp), "OK user:%s", cli->username);
         send_line(fd, resp);
+    } else if (strcmp(cmd, CMD_TEAM_CREATE) == 0) {
+        cmd_team_create(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_TEAM_LIST) == 0) {
+        cmd_team_list(cli);
+    } else if (strcmp(cmd, CMD_TEAM_MEMBERS) == 0) {
+        cmd_team_members(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_TEAM_DELETE) == 0) {
+        cmd_team_delete(cli);
+    } else if (strcmp(cmd, CMD_TEAM_LEAVE) == 0) {
+        cmd_team_leave(cli);
+    } else if (strcmp(cmd, CMD_TEAM_KICK) == 0) {
+        cmd_team_kick(cli, n, arg1);
     } else {
         char resp[BUF_SIZE];
         snprintf(resp, sizeof(resp), "ERR unknown command: %s", line);
@@ -119,6 +294,7 @@ int main(int argc, char *argv[]) {
     }
 
     auth_init();
+    team_init();
     printf("Server listening on port %d...\n", port);
     log_event("SERVER", "Started listening");
 
@@ -166,6 +342,7 @@ int main(int argc, char *argv[]) {
             char tmp[BUF_SIZE];
             ssize_t n = recv(cfd, tmp, sizeof(tmp), 0);
             if (n <= 0) {
+                if (clients[i].logged_in) leave_current_team(clients[i].username);
                 close(cfd);
                 clients[i].fd = -1;
                 clients[i].logged_in = 0;
@@ -175,6 +352,7 @@ int main(int argc, char *argv[]) {
             }
 
             if (lb_append(&clients[i].lb, tmp, (int)n) < 0) {
+                if (clients[i].logged_in) leave_current_team(clients[i].username);
                 close(cfd);
                 clients[i].fd = -1;
                 clients[i].logged_in = 0;

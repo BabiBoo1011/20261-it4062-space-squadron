@@ -4,3 +4,4 @@ server_bin
 client_bin
 logs/*.log
 data/accounts.txt
+.vscode/

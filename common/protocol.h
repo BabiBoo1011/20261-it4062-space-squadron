@@ -47,4 +47,12 @@
 #define CMD_LOGOUT   "LOGOUT"
 #define CMD_WHOAMI   "WHOAMI"
 
+/* Lenh quan ly doi */
+#define CMD_TEAM_CREATE  "TEAM_CREATE"
+#define CMD_TEAM_LIST    "TEAM_LIST"
+#define CMD_TEAM_MEMBERS "TEAM_MEMBERS"
+#define CMD_TEAM_DELETE  "TEAM_DELETE"
+#define CMD_TEAM_LEAVE   "TEAM_LEAVE"
+#define CMD_TEAM_KICK    "TEAM_KICK"
+
 #endif
