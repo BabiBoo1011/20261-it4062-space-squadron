@@ -3,8 +3,8 @@ CFLAGS = -Wall -Wextra -std=c99 -Icommon -Iserver
 
 all: server_bin client_bin
 
-server_bin: server/main.c server/logger.c server/auth.c server/team.c common/framing.c
-	$(CC) $(CFLAGS) server/main.c server/logger.c server/auth.c server/team.c common/framing.c -o server_bin
+server_bin: server/main.c server/logger.c server/auth.c server/team.c server/match.c common/framing.c
+	$(CC) $(CFLAGS) server/main.c server/logger.c server/auth.c server/team.c server/match.c common/framing.c -o server_bin
 
 client_bin: client/main.c common/framing.c
 	$(CC) $(CFLAGS) client/main.c common/framing.c -o client_bin

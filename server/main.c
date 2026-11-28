@@ -13,6 +13,7 @@
 #include "logger.h"
 #include "protocol.h"
 #include "team.h"
+#include "match.h"
 
 typedef struct {
     int fd;
@@ -686,6 +687,7 @@ int main(int argc, char *argv[]) {
 
     auth_init();
     team_init();
+    match_init();
     printf("Server listening on port %d...\n", port);
     log_event("SERVER", "Started listening");
 
