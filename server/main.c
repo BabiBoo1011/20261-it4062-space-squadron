@@ -640,6 +640,56 @@ static void cmd_start(ClientSlot *cli) {
     send_line(cli->fd, resp);
 }
 
+/* STATUS: xem tau cua minh */
+static void cmd_status(ClientSlot *cli) {
+    Match *m = match_find_by_user(cli->username);
+    if (!m) {
+        send_line(cli->fd, "ERR 412 you are not in a match");
+        return;
+    }
+    Ship *s = match_find_ship(m, cli->username);
+
+    char resp[256];
+    snprintf(resp, sizeof(resp),
+             "OK STATUS hp=%d armor=%d,%d coin=%d ammo=%d lasers=%d laser_power=%d missiles=%d",
+             s->hp, s->armor[0], s->armor[1], s->coin, s->ammo,
+             s->lasers, s->laser_power, s->missiles);
+    send_line(cli->fd, resp);
+}
+
+/* SHIPS: xem moi tau trong tran, dang "<user>:<team>:<hp>:<tong_armor>:<alive|dead>" */
+static void cmd_ships(ClientSlot *cli) {
+    Match *m = match_find_by_user(cli->username);
+    if (!m) {
+        send_line(cli->fd, "ERR 412 you are not in a match");
+        return;
+    }
+
+    char resp[BUF_SIZE];
+    int pos = snprintf(resp, sizeof(resp), "OK SHIPS");
+    for (int k = 0; k < m->ship_count && pos < (int)sizeof(resp); k++) {
+        const Ship *s = &m->ships[k];
+        int armor = 0;
+        for (int l = 0; l < MAX_ARMOR_LAYERS; l++) armor += s->armor[l];
+        pos += snprintf(resp + pos, sizeof(resp) - pos, " %s:%s:%d:%d:%s",
+                        s->user, s->team, s->hp, armor, s->alive ? "alive" : "dead");
+    }
+    send_line(cli->fd, resp);
+}
+
+/* Cac lenh lam thay doi doi / thach dau: khong duoc dung khi dang trong tran */
+static int is_blocked_in_match(const char *cmd) {
+    static const char *blocked[] = {
+        CMD_TEAM_DELETE, CMD_TEAM_LEAVE, CMD_TEAM_KICK,
+        CMD_TEAM_INVITE, CMD_TEAM_APPROVE, CMD_TEAM_REJECT,
+        CMD_CHALLENGE, CMD_CHALLENGE_ACCEPT, CMD_CHALLENGE_DECLINE,
+    };
+    for (size_t i = 0; i < sizeof(blocked) / sizeof(blocked[0]); i++) {
+        if (strcmp(cmd, blocked[i]) == 0) return 1;
+    }
+    return 0;
+}
+
 /* ======================================================= */
 
 static void handle_line(ClientSlot *cli, const char *line) {
@@ -671,7 +721,9 @@ static void handle_line(ClientSlot *cli, const char *line) {
             send_line(fd, "ERR invalid credentials");
         }
     } else if (strcmp(cmd, CMD_LOGOUT) == 0) {
-        if (cli->logged_in) {
+        if (cli->logged_in && match_find_by_user(cli->username)) {
+            send_line(fd, "ERR 412 cannot logout during a match");
+        } else if (cli->logged_in) {
             leave_current_team(cli->username);
             req_clear_user(cli->username);
             cli->logged_in = 0;
@@ -688,6 +740,8 @@ static void handle_line(ClientSlot *cli, const char *line) {
         char resp[64];
         snprintf(resp, sizeof(resp), "OK user:%s", cli->username);
         send_line(fd, resp);
+    } else if (is_blocked_in_match(cmd) && match_find_by_user(cli->username)) {
+        send_line(fd, "ERR 412 not allowed during a match");
     } else if (strcmp(cmd, CMD_TEAM_CREATE) == 0) {
         cmd_team_create(cli, n, arg1);
     } else if (strcmp(cmd, CMD_TEAM_LIST) == 0) {
@@ -720,6 +774,10 @@ static void handle_line(ClientSlot *cli, const char *line) {
         cmd_challenge_decline(cli, n, arg1);
     } else if (strcmp(cmd, CMD_START) == 0) {
         cmd_start(cli);
+    } else if (strcmp(cmd, CMD_STATUS) == 0) {
+        cmd_status(cli);
+    } else if (strcmp(cmd, CMD_SHIPS) == 0) {
+        cmd_ships(cli);
     } else {
         char resp[BUF_SIZE];
         snprintf(resp, sizeof(resp), "ERR unknown command: %s", line);
@@ -814,7 +872,8 @@ int main(int argc, char *argv[]) {
             char tmp[BUF_SIZE];
             ssize_t n = recv(cfd, tmp, sizeof(tmp), 0);
             if (n <= 0) {
-                if (clients[i].logged_in) {
+                /* Dang trong tran thi giu nguyen doi va tau (co the dang nhap lai) */
+                if (clients[i].logged_in && !match_find_by_user(clients[i].username)) {
                     leave_current_team(clients[i].username);
                     req_clear_user(clients[i].username);
                 }
@@ -827,7 +886,8 @@ int main(int argc, char *argv[]) {
             }
 
             if (lb_append(&clients[i].lb, tmp, (int)n) < 0) {
-                if (clients[i].logged_in) {
+                /* Dang trong tran thi giu nguyen doi va tau (co the dang nhap lai) */
+                if (clients[i].logged_in && !match_find_by_user(clients[i].username)) {
                     leave_current_team(clients[i].username);
                     req_clear_user(clients[i].username);
                 }

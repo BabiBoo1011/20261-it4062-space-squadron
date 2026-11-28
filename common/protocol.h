@@ -68,6 +68,8 @@
 
 /* Lenh trong tran */
 #define CMD_START  "START"
+#define CMD_STATUS "STATUS"
+#define CMD_SHIPS  "SHIPS"
 
 #define REQUEST_TIMEOUT_SEC 120
 
