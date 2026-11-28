@@ -565,6 +565,81 @@ static void check_expired_requests(void) {
     }
 }
 
+/* ===================== TRAN DAU ===================== */
+
+/* Tim loi thach dau DA DUOC CHAP NHAN ma doi "team" tham gia (gui hoac nhan) */
+static Challenge *find_accepted_challenge(const char *team) {
+    for (int i = 0; i < MAX_CHALLENGES; i++) {
+        Challenge *c = challenge_at(i);
+        if (c && c->accepted &&
+            (strcmp(c->from_team, team) == 0 || strcmp(c->to_team, team) == 0)) {
+            return c;
+        }
+    }
+    return NULL;
+}
+
+/* Gui 1 dong toi moi nguoi choi trong tran */
+static void notify_match(const Match *m, const char *msg) {
+    for (int k = 0; k < m->ship_count; k++) {
+        send_to_user(m->ships[k].user, msg);
+    }
+}
+
+/* START (doi truong, sau khi loi thach dau da duoc chap nhan) */
+static void cmd_start(ClientSlot *cli) {
+    Team *my_team = team_find_by_member(cli->username);
+    if (!my_team) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(my_team, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    if (match_find_by_team(my_team->name)) {
+        send_line(cli->fd, "ERR 412 your team is already in a match");
+        return;
+    }
+    Challenge *c = find_accepted_challenge(my_team->name);
+    if (!c) {
+        send_line(cli->fd, "ERR 412 no accepted challenge");
+        return;
+    }
+
+    /* Doi A = doi gui thach dau, doi B = doi nhan */
+    Team *a = team_find(c->from_team);
+    Team *b = team_find(c->to_team);
+    if (!a || !b) {
+        challenge_remove(c);
+        send_line(cli->fd, "ERR 404 opponent team not found");
+        return;
+    }
+    if (match_find_by_team(a->name) || match_find_by_team(b->name)) {
+        send_line(cli->fd, "ERR 412 opponent team is already in a match");
+        return;
+    }
+
+    Match *m = match_create(a, b);
+    if (!m) {
+        send_line(cli->fd, "ERR 500 server is full");
+        return;
+    }
+    challenge_remove(c);
+    req_clear_team(a->name); /* huy cac yeu cau / loi moi vao doi dang cho */
+    req_clear_team(b->name);
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT MATCH_START %d %s %s", m->id, m->team_a, m->team_b);
+    notify_match(m, msg);
+    snprintf(msg, sizeof(msg), "match %d started: %s vs %s", m->id, m->team_a, m->team_b);
+    log_event("MATCH", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK START %d", m->id);
+    send_line(cli->fd, resp);
+}
+
 /* ======================================================= */
 
 static void handle_line(ClientSlot *cli, const char *line) {
@@ -643,6 +718,8 @@ static void handle_line(ClientSlot *cli, const char *line) {
         cmd_challenge_accept(cli, n, arg1);
     } else if (strcmp(cmd, CMD_CHALLENGE_DECLINE) == 0) {
         cmd_challenge_decline(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_START) == 0) {
+        cmd_start(cli);
     } else {
         char resp[BUF_SIZE];
         snprintf(resp, sizeof(resp), "ERR unknown command: %s", line);

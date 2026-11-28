@@ -66,6 +66,9 @@
 #define CMD_CHALLENGE_ACCEPT  "CHALLENGE_ACCEPT"
 #define CMD_CHALLENGE_DECLINE "CHALLENGE_DECLINE"
 
+/* Lenh trong tran */
+#define CMD_START  "START"
+
 #define REQUEST_TIMEOUT_SEC 120
 
 #endif
