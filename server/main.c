@@ -192,6 +192,378 @@ static void cmd_team_kick(ClientSlot *cli, int n, const char *target) {
     send_line(cli->fd, resp);
 }
 
+/* TEAM_JOIN <team> */
+static void cmd_team_join(ClientSlot *cli, int n, const char *team_name) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_JOIN <team>");
+        return;
+    }
+    if (team_find_by_member(cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_IN_TEAM);
+        return;
+    }
+    Team *t = team_find(team_name);
+    if (!t) {
+        send_line(cli->fd, "ERR 404 team not found");
+        return;
+    }
+    if (t->member_count >= MAX_TEAM_SIZE) {
+        send_team_err(cli->fd, TEAM_ERR_FULL);
+        return;
+    }
+    int rc = req_add(REQ_JOIN, t->name, cli->username);
+    if (rc != TEAM_OK) {
+        send_team_err(cli->fd, rc);
+        return;
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT JOIN_REQUEST %s", cli->username);
+    send_to_user(t->members[0], msg);
+    snprintf(msg, sizeof(msg), "%s requested to join team %s", cli->username, t->name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK TEAM_JOIN %s", t->name);
+    send_line(cli->fd, resp);
+}
+
+/* TEAM_APPROVE <user> (chi doi truong) */
+static void cmd_team_approve(ClientSlot *cli, int n, const char *target) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_APPROVE <user>");
+        return;
+    }
+    Team *t = team_find_by_member(cli->username);
+    if (!t) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(t, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    TeamRequest *r = req_find(REQ_JOIN, t->name, target);
+    if (!r) {
+        send_line(cli->fd, "ERR 404 join request not found");
+        return;
+    }
+    int rc = team_add_member(t, target);
+    if (rc != TEAM_OK) {
+        if (rc == TEAM_ERR_IN_TEAM) req_remove(r);
+        send_team_err(cli->fd, rc);
+        return;
+    }
+    req_clear_user(target);
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT JOIN_ACCEPTED %s", t->name);
+    send_to_user(target, msg);
+    snprintf(msg, sizeof(msg), "EVT MEMBER_JOINED %s", target);
+    notify_team(t, target, msg);
+    snprintf(msg, sizeof(msg), "%s approved %s into team %s", cli->username, target, t->name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK TEAM_APPROVE %s", target);
+    send_line(cli->fd, resp);
+}
+
+/* TEAM_REJECT <user> (chi doi truong) */
+static void cmd_team_reject(ClientSlot *cli, int n, const char *target) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_REJECT <user>");
+        return;
+    }
+    Team *t = team_find_by_member(cli->username);
+    if (!t) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(t, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    TeamRequest *r = req_find(REQ_JOIN, t->name, target);
+    if (!r) {
+        send_line(cli->fd, "ERR 404 join request not found");
+        return;
+    }
+    req_remove(r);
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT JOIN_REJECTED %s", t->name);
+    send_to_user(target, msg);
+    snprintf(msg, sizeof(msg), "%s rejected %s from team %s", cli->username, target, t->name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK TEAM_REJECT %s", target);
+    send_line(cli->fd, resp);
+}
+
+/* TEAM_INVITE <user> (chi doi truong) */
+static void cmd_team_invite(ClientSlot *cli, int n, const char *target) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: TEAM_INVITE <user>");
+        return;
+    }
+    Team *t = team_find_by_member(cli->username);
+    if (!t) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(t, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    if (t->member_count >= MAX_TEAM_SIZE) {
+        send_team_err(cli->fd, TEAM_ERR_FULL);
+        return;
+    }
+    if (!is_user_online(target)) {
+        send_line(cli->fd, "ERR 404 user not online");
+        return;
+    }
+    if (team_find_by_member(target)) {
+        send_line(cli->fd, "ERR 412 user already in a team");
+        return;
+    }
+    int rc = req_add(REQ_INVITE, t->name, target);
+    if (rc != TEAM_OK) {
+        send_team_err(cli->fd, rc);
+        return;
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT INVITE %s %s", t->name, cli->username);
+    send_to_user(target, msg);
+    snprintf(msg, sizeof(msg), "%s invited %s to team %s", cli->username, target, t->name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK TEAM_INVITE %s", target);
+    send_line(cli->fd, resp);
+}
+
+/* INVITE_ACCEPT <team> */
+static void cmd_invite_accept(ClientSlot *cli, int n, const char *team_name) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: INVITE_ACCEPT <team>");
+        return;
+    }
+    if (team_find_by_member(cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_IN_TEAM);
+        return;
+    }
+    TeamRequest *r = req_find(REQ_INVITE, team_name, cli->username);
+    if (!r) {
+        send_line(cli->fd, "ERR 404 invite not found");
+        return;
+    }
+    Team *t = team_find(team_name);
+    if (!t) {
+        req_remove(r);
+        send_line(cli->fd, "ERR 404 team not found");
+        return;
+    }
+    int rc = team_add_member(t, cli->username);
+    if (rc != TEAM_OK) {
+        send_team_err(cli->fd, rc);
+        return;
+    }
+    req_clear_user(cli->username);
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT MEMBER_JOINED %s", cli->username);
+    notify_team(t, cli->username, msg);
+    snprintf(msg, sizeof(msg), "%s accepted invite to team %s", cli->username, t->name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK INVITE_ACCEPT %s", t->name);
+    send_line(cli->fd, resp);
+}
+
+/* INVITE_DECLINE <team> */
+static void cmd_invite_decline(ClientSlot *cli, int n, const char *team_name) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: INVITE_DECLINE <team>");
+        return;
+    }
+    TeamRequest *r = req_find(REQ_INVITE, team_name, cli->username);
+    if (!r) {
+        send_line(cli->fd, "ERR 404 invite not found");
+        return;
+    }
+    req_remove(r);
+
+    Team *t = team_find(team_name);
+    if (t) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "EVT INVITE_DECLINED %s", cli->username);
+        send_to_user(t->members[0], msg);
+    }
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s declined invite from team %s", cli->username, team_name);
+    log_event("TEAM", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK INVITE_DECLINE %s", team_name);
+    send_line(cli->fd, resp);
+}
+
+/* CHALLENGE <team> (chi doi truong) */
+static void cmd_challenge(ClientSlot *cli, int n, const char *target_team) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: CHALLENGE <team>");
+        return;
+    }
+    Team *my_team = team_find_by_member(cli->username);
+    if (!my_team) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(my_team, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    Team *enemy = team_find(target_team);
+    if (!enemy) {
+        send_line(cli->fd, "ERR 404 team not found");
+        return;
+    }
+    if (enemy == my_team) {
+        send_line(cli->fd, "ERR 400 cannot challenge own team");
+        return;
+    }
+    int rc = challenge_add(my_team->name, enemy->name);
+    if (rc != TEAM_OK) {
+        send_team_err(cli->fd, rc);
+        return;
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT CHALLENGE %s", my_team->name);
+    send_to_user(enemy->members[0], msg);
+    snprintf(msg, sizeof(msg), "%s challenged %s", my_team->name, enemy->name);
+    log_event("MATCH", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK CHALLENGE %s", enemy->name);
+    send_line(cli->fd, resp);
+}
+
+/* CHALLENGE_ACCEPT <team> (chi doi truong) */
+static void cmd_challenge_accept(ClientSlot *cli, int n, const char *from_team) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: CHALLENGE_ACCEPT <team>");
+        return;
+    }
+    Team *my_team = team_find_by_member(cli->username);
+    if (!my_team) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(my_team, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    Challenge *c = challenge_find(from_team, my_team->name);
+    if (!c || c->accepted) {
+        send_line(cli->fd, "ERR 404 challenge not found");
+        return;
+    }
+    Team *sender = team_find(from_team);
+    if (!sender) {
+        challenge_remove(c);
+        send_line(cli->fd, "ERR 404 team not found");
+        return;
+    }
+    c->accepted = 1;
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "EVT CHALLENGE_ACCEPTED %s %s", sender->name, my_team->name);
+    notify_team(sender, NULL, msg);
+    notify_team(my_team, NULL, msg);
+    snprintf(msg, sizeof(msg), "%s accepted challenge from %s", my_team->name, sender->name);
+    log_event("MATCH", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK CHALLENGE_ACCEPT %s", sender->name);
+    send_line(cli->fd, resp);
+}
+
+/* CHALLENGE_DECLINE <team> (chi doi truong) */
+static void cmd_challenge_decline(ClientSlot *cli, int n, const char *from_team) {
+    if (n < 2) {
+        send_line(cli->fd, "ERR 400 usage: CHALLENGE_DECLINE <team>");
+        return;
+    }
+    Team *my_team = team_find_by_member(cli->username);
+    if (!my_team) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_IN_TEAM);
+        return;
+    }
+    if (!team_is_captain(my_team, cli->username)) {
+        send_team_err(cli->fd, TEAM_ERR_NOT_CAPTAIN);
+        return;
+    }
+    Challenge *c = challenge_find(from_team, my_team->name);
+    if (!c || c->accepted) {
+        send_line(cli->fd, "ERR 404 challenge not found");
+        return;
+    }
+    challenge_remove(c);
+
+    Team *sender = team_find(from_team);
+    if (sender) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "EVT CHALLENGE_DECLINED %s", my_team->name);
+        send_to_user(sender->members[0], msg);
+    }
+    char msg[128];
+    snprintf(msg, sizeof(msg), "%s declined challenge from %s", my_team->name, from_team);
+    log_event("MATCH", msg);
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "OK CHALLENGE_DECLINE %s", from_team);
+    send_line(cli->fd, resp);
+}
+
+/* Kiem tra va huy cac yeu cau / loi moi / thach dau qua han 2 phut */
+static void check_expired_requests(void) {
+    time_t now = time(NULL);
+    for (int i = 0; i < MAX_TEAM_REQUESTS; i++) {
+        TeamRequest *r = req_at(i);
+        if (!r || now - r->created_at < REQUEST_TIMEOUT_SEC) continue;
+
+        const char *evt = (r->type == REQ_JOIN) ? "JOIN_EXPIRED" : "INVITE_EXPIRED";
+        char msg[128];
+        snprintf(msg, sizeof(msg), "EVT %s %s %s", evt, r->team, r->user);
+        send_to_user(r->user, msg);
+        Team *t = team_find(r->team);
+        if (t) send_to_user(t->members[0], msg);
+
+        log_event("TEAM", msg);
+        req_remove(r);
+    }
+    for (int i = 0; i < MAX_CHALLENGES; i++) {
+        Challenge *c = challenge_at(i);
+        if (!c || c->accepted || now - c->created_at < REQUEST_TIMEOUT_SEC) continue;
+
+        char msg[128];
+        snprintf(msg, sizeof(msg), "EVT CHALLENGE_EXPIRED %s %s", c->from_team, c->to_team);
+        Team *ta = team_find(c->from_team);
+        Team *tb = team_find(c->to_team);
+        if (ta) send_to_user(ta->members[0], msg);
+        if (tb) send_to_user(tb->members[0], msg);
+
+        log_event("MATCH", msg);
+        challenge_remove(c);
+    }
+}
+
 /* ======================================================= */
 
 static void handle_line(ClientSlot *cli, const char *line) {
@@ -225,6 +597,7 @@ static void handle_line(ClientSlot *cli, const char *line) {
     } else if (strcmp(cmd, CMD_LOGOUT) == 0) {
         if (cli->logged_in) {
             leave_current_team(cli->username);
+            req_clear_user(cli->username);
             cli->logged_in = 0;
             cli->username[0] = '\0';
             log_event("AUTH", "User logged out");
@@ -251,6 +624,24 @@ static void handle_line(ClientSlot *cli, const char *line) {
         cmd_team_leave(cli);
     } else if (strcmp(cmd, CMD_TEAM_KICK) == 0) {
         cmd_team_kick(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_TEAM_JOIN) == 0) {
+        cmd_team_join(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_TEAM_APPROVE) == 0) {
+        cmd_team_approve(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_TEAM_REJECT) == 0) {
+        cmd_team_reject(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_TEAM_INVITE) == 0) {
+        cmd_team_invite(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_INVITE_ACCEPT) == 0) {
+        cmd_invite_accept(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_INVITE_DECLINE) == 0) {
+        cmd_invite_decline(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_CHALLENGE) == 0) {
+        cmd_challenge(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_CHALLENGE_ACCEPT) == 0) {
+        cmd_challenge_accept(cli, n, arg1);
+    } else if (strcmp(cmd, CMD_CHALLENGE_DECLINE) == 0) {
+        cmd_challenge_decline(cli, n, arg1);
     } else {
         char resp[BUF_SIZE];
         snprintf(resp, sizeof(resp), "ERR unknown command: %s", line);
@@ -311,10 +702,12 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        if (select(max_fd + 1, &readfds, NULL, NULL, NULL) < 0) {
+        struct timeval tv = {1, 0};
+        if (select(max_fd + 1, &readfds, NULL, NULL, &tv) < 0) {
             perror("select");
             break;
         }
+        check_expired_requests();
 
         if (FD_ISSET(listen_fd, &readfds)) {
             int cfd = accept(listen_fd, NULL, NULL);
@@ -342,7 +735,10 @@ int main(int argc, char *argv[]) {
             char tmp[BUF_SIZE];
             ssize_t n = recv(cfd, tmp, sizeof(tmp), 0);
             if (n <= 0) {
-                if (clients[i].logged_in) leave_current_team(clients[i].username);
+                if (clients[i].logged_in) {
+                    leave_current_team(clients[i].username);
+                    req_clear_user(clients[i].username);
+                }
                 close(cfd);
                 clients[i].fd = -1;
                 clients[i].logged_in = 0;
@@ -352,7 +748,10 @@ int main(int argc, char *argv[]) {
             }
 
             if (lb_append(&clients[i].lb, tmp, (int)n) < 0) {
-                if (clients[i].logged_in) leave_current_team(clients[i].username);
+                if (clients[i].logged_in) {
+                    leave_current_team(clients[i].username);
+                    req_clear_user(clients[i].username);
+                }
                 close(cfd);
                 clients[i].fd = -1;
                 clients[i].logged_in = 0;
